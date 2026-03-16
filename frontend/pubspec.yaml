@@ -1,0 +1,50 @@
+name: curamind
+description: AI-Driven Health & Wellness Hub
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # UI & Icons
+  cupertino_icons: ^1.0.2
+  google_fonts: ^6.2.1
+  lucide_icons: ^0.257.0
+  intl: ^0.19.0
+  
+  # Network & Backend
+  http: ^1.2.1
+  shared_preferences: ^2.2.2
+  webview_flutter: ^4.13.0
+  
+  # Hardware & Services
+  # Critical for Android 13+ permission handling
+  permission_handler: ^11.3.1
+  # Modern Health API integration
+  health: ^11.0.0
+  
+  # --- DOCUMENT SCANNING ---
+  # IMPORTANT: Version 8.1.2+ is mandatory to avoid 'v1 embedding' build errors
+  file_picker: ^8.1.2
+
+  # --- NOTIFICATIONS & ALARMS ---
+  # Used for CareClock pill reminders and doctor appointments
+  flutter_local_notifications: ^17.2.3
+  timezone: ^0.9.4
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+
+flutter:
+  uses-material-design: true
+  
+  # Ensure your project folder has these exact paths for images and logos
+  assets:
+    - assets/images/
+    - assets/logos/
