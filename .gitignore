@@ -1,0 +1,25 @@
+# Python environment (wherever it is located)
+**/venv/
+**/venv311/
+**/env/
+__pycache__/
+*.pyc
+
+# Sensitive data
+.env
+
+# Flutter / Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+**/build/
+
+# IDE settings
+.vscode/
+.idea/
+
+
+# Add these if not already there
+build/
+frontend/build/
+frontend/.metadata
