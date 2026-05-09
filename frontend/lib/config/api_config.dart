@@ -2,8 +2,8 @@ import 'dart:io';
 
 class ApiConfig {
   /// 🌐 LAPTOP IP ADDRESS (Hotspot / Wi-Fi IPv4)
-  /// Updated based on detected IP: 172.20.10.5
-  static const String serverIp = '172.20.10.5';
+  /// Updated based on detected IP: 172.20.10.3
+  static const String serverIp = '172.20.10.3';
   static const String port = '8000';
 
   /// 🏠 Root URL (e.g., for health checks or favicon)
@@ -30,6 +30,5 @@ class ApiConfig {
   static String get dailyMovesUrl => '$baseUrl/dailymoves';
 
   /// 📲 Device-Specific Logic
-  /// Returns the mandatory laptop IP for physical device (CPH2269) connectivity.
   static String get smartBaseUrl => baseUrl;
 }

@@ -1,12 +1,32 @@
-from fastapi import APIRouter, HTTPException, status
+# lifelog.py
+
+from fastapi import APIRouter, HTTPException, status, UploadFile, File, Form
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import Optional
 from datetime import datetime
+import pytz
+import fitz
+from PIL import Image
+import pytesseract
+import io
+import nltk
+
+from sumy.summarizers.lsa import LsaSummarizer
+from sumy.parsers.plaintext import PlaintextParser
+from sumy.nlp.tokenizers import Tokenizer
+
 from ..services.mongo_storage import MongoStorage
 
 router = APIRouter()
 
-# --- Pydantic Models for Validation ---
+nltk.download("punkt")
+
+india = pytz.timezone("Asia/Kolkata")
+
+
+# =========================================
+# MODELS
+# =========================================
 
 class FitnessReport(BaseModel):
     user_id: str
@@ -24,6 +44,7 @@ class FitnessReport(BaseModel):
     prediction: str
     xai_explanation: Optional[str] = None
 
+
 class MentalHealthReport(BaseModel):
     user_id: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
@@ -36,97 +57,167 @@ class MentalHealthReport(BaseModel):
     overall_suggestion: str
     journal_tip: Optional[str] = None
 
-# --- LifeLog Hub Endpoints ---
+
+# =========================================
+# GET COMPLETE LIFELOG HISTORY
+# =========================================
 
 @router.get("/history/{user_id}")
 async def get_user_history_hub(user_id: str):
-    """
-    Aggregates all user activity from MongoDB.
-    Categorizes data for the Flutter 'LifeLog Hub' timeline.
-    """
-    print(f"--- 📡 Syncing Integrated History for: {user_id} ---")
     try:
-        # Fetch data from MongoStorage
         raw_data = MongoStorage.get_full_lifelog(user_id)
-        
+
+        def convert_to_ist(record):
+            if "timestamp" in record:
+                ts = record["timestamp"]
+
+                if ts.tzinfo is None:
+                    ts = pytz.utc.localize(ts)
+
+                record["timestamp"] = ts.astimezone(india).strftime("%d-%m-%Y %I:%M %p IST")
+
+            record["_id"] = str(record["_id"])
+            return record
+
         daily_moves = []
         mind_ease = []
-        digitized_records = [] # Added for Vision feature
-        
-        # 1. Process AI Module Reports
+        digitized_records = []
+
         for report in raw_data.get("ai_reports", []):
-            report["_id"] = str(report["_id"]) 
-            
-            module_name = report.get("module")
-            if module_name == "Daily Moves":
+            module = report.get("module")
+            report = convert_to_ist(report)
+
+            if module == "Daily Moves":
                 daily_moves.append(report)
-            elif module_name == "MindEase":
+            elif module == "MindEase":
                 mind_ease.append(report)
-            elif module_name == "Vision Scan": # Support for stored digitized reports
+            elif module == "Vision Scan":
                 digitized_records.append(report)
 
-        # 2. Process Medicine Reminders
-        meds = raw_data.get("medicine_alerts", [])
-        for m in meds:
-            m["_id"] = str(m["_id"])
-        
-        # 3. Process Doctor Appointments
-        apps = raw_data.get("appointments", [])
-        for a in apps:
-            a["_id"] = str(a["_id"])
-
-        print(f"✅ Found {len(daily_moves)} Moves, {len(mind_ease)} Moods, {len(apps)} Apps, {len(meds)} Meds")
+        meds = [convert_to_ist(m) for m in raw_data.get("medicine_alerts", [])]
+        apps = [convert_to_ist(a) for a in raw_data.get("appointments", [])]
 
         return {
             "daily_moves": daily_moves,
             "mind_ease": mind_ease,
             "appointments": apps,
             "medicines": meds,
-            "digitized_reports": digitized_records # Sending back to UI
+            "digitized_reports": digitized_records
         }
-    except Exception as e:
-        print(f"❌ LifeLog Router Error: {e}")
-        raise HTTPException(
-            status_code=500, 
-            detail=f"History Sync Failed: {str(e)}"
-        )
 
-@router.post("/save_vision_report")
-async def save_vision_report(data: dict):
-    """Saves the Gemini Vision analysis so it persists after refresh."""
-    try:
-        report_id = MongoStorage.save_report(
-            user_id=data['user_id'],
-            module_name="Vision Scan",
-            input_data={"filename": data.get('filename')},
-            prediction=data.get('summary')
-        )
-        return {"status": "success", "id": report_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =========================================
+# PDF / IMAGE SUMMARIZER
+# =========================================
+
+@router.post("/summarize_document")
+async def summarize_document(
+    user_id: str = Form(...),
+    file: UploadFile = File(...)
+):
+    try:
+        contents = await file.read()
+        extracted_text = ""
+
+        if file.filename.lower().endswith(".pdf"):
+            doc = fitz.open(stream=contents, filetype="pdf")
+
+            for page in doc:
+                text = page.get_text()
+
+                if not text.strip():
+                    pix = page.get_pixmap()
+                    img = Image.open(io.BytesIO(pix.tobytes()))
+                    text = pytesseract.image_to_string(img)
+
+                extracted_text += text + "\n"
+
+            doc.close()
+
+        elif file.filename.lower().endswith((".jpg", ".jpeg", ".png")):
+            image = Image.open(io.BytesIO(contents))
+            extracted_text = pytesseract.image_to_string(image)
+
+        else:
+            return {"summary": "Unsupported file type."}
+
+        if not extracted_text.strip():
+            return {"summary": "No readable text found in document."}
+
+        extracted_text = extracted_text[:5000]
+
+        parser = PlaintextParser.from_string(extracted_text, Tokenizer("english"))
+        summarizer = LsaSummarizer()
+        summary_sentences = summarizer(parser.document, 5)
+        summary = " ".join(str(sentence) for sentence in summary_sentences)
+
+        if not summary.strip():
+            summary = "Document analyzed but meaningful summary could not be generated."
+
+        timestamp = datetime.now(india)
+
+        MongoStorage.save_report(
+            user_id=user_id,
+            module_name="Vision Scan",
+            input_data={"filename": file.filename},
+            prediction=summary,
+            timestamp=timestamp
+        )
+
+        return {
+            "status": "success",
+            "summary": summary,
+            "timestamp": timestamp.strftime("%d-%m-%Y %I:%M %p IST")
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Document processing failed.")
+
+
+# =========================================
+# SAVE DAILY MOVES
+# =========================================
 
 @router.post("/fitness_report", status_code=status.HTTP_201_CREATED)
 async def create_fitness_report(report: FitnessReport):
     try:
+        timestamp = datetime.now(india)
+
         report_id = MongoStorage.save_report(
             user_id=report.user_id,
             module_name="Daily Moves",
-            input_data=report.dict(),
-            prediction=report.prediction
+            input_data=report.dict(exclude={"timestamp"}),
+            prediction=report.prediction,
+            timestamp=timestamp
         )
+
         return {"status": "success", "id": report_id}
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# =========================================
+# SAVE MINDEASE
+# =========================================
 
 @router.post("/mental_health_report", status_code=status.HTTP_201_CREATED)
 async def create_mental_health_report(report: MentalHealthReport):
     try:
+        timestamp = datetime.now(india)
+
         report_id = MongoStorage.save_report(
             user_id=report.user_id,
             module_name="MindEase",
-            input_data=report.dict(),
-            prediction=report.overall_suggestion
+            input_data=report.dict(exclude={"timestamp"}),
+            prediction=report.overall_suggestion,
+            timestamp=timestamp
         )
+
         return {"status": "success", "id": report_id}
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+from datetime import datetime, timezone
 from ..services.mongo_storage import MongoStorage
 
 router = APIRouter()
@@ -18,11 +19,11 @@ class SentimentResponse(BaseModel):
     detailed_analysis: dict
 
 class MentalHealthAssessment(BaseModel):
-    user_id: str            # Linked to PostgreSQL UUID
-    phq_score: int          # PHQ-9 Total
-    phq_level: str          # e.g., "Mild depression"
-    gad_score: int          # GAD-7 Total
-    gad_level: str          # e.g., "Minimal anxiety"
+    user_id: str
+    phq_score: int
+    phq_level: str
+    gad_score: int
+    gad_level: str
     journal_entry: str
     journal_sentiment: str  
     overall_suggestion: str
@@ -32,18 +33,13 @@ class MentalHealthAssessment(BaseModel):
 
 @router.post("/analyze_sentiment", response_model=SentimentResponse)
 async def analyze_journal_sentiment(entry: JournalEntry):
-    """
-    Performs sentiment analysis on the journal text using VADER.
-    Provides immediate feedback to the Flutter UI during the assessment.
-    """
+
     if not entry.text.strip():
         raise HTTPException(status_code=400, detail="Journal entry cannot be empty.")
 
-    # Get polarity scores
     vs = analyzer.polarity_scores(entry.text)
     compound_score = vs['compound']
 
-    # Logic to determine mood label and helpful tip
     if compound_score >= 0.05:
         mood = "Positive 🌞"
         suggestion = "You seem to be in a good headspace! Reflect on what contributed to this positivity today."
@@ -63,12 +59,9 @@ async def analyze_journal_sentiment(entry: JournalEntry):
 
 @router.post("/save_assessment", status_code=status.HTTP_201_CREATED)
 async def save_assessment_results(report: MentalHealthAssessment):
-    """
-    Saves the complete mental health check-in (PHQ-9, GAD-7, and Journal) to MongoDB.
-    This ensures the data is available in the LifeLog Hub timeline.
-    """
+
     try:
-        # We use the save_report method from MongoStorage to keep history consistent
+        # ✅ FIXED: Pass timezone-aware UTC timestamp
         report_id = MongoStorage.save_report(
             user_id=report.user_id,
             module_name="MindEase",
@@ -81,7 +74,8 @@ async def save_assessment_results(report: MentalHealthAssessment):
                 "journal_sentiment": report.journal_sentiment,
                 "journal_tip": report.journal_tip
             },
-            prediction=report.overall_suggestion
+            prediction=report.overall_suggestion,
+            timestamp=datetime.now(timezone.utc)   # ✅ IMPORTANT FIX
         )
         
         print(f"✅ MindEase: Assessment for {report.user_id} saved to MongoDB.")
@@ -89,8 +83,10 @@ async def save_assessment_results(report: MentalHealthAssessment):
         return {
             "status": "success",
             "message": "Mental health check-in logged successfully.",
-            "id": report_id
+            "id": report_id,
+            "timestamp": datetime.now(timezone.utc).isoformat()  # ✅ consistent return
         }
+
     except Exception as e:
         print(f"❌ MindEase Save Error: {e}")
         raise HTTPException(

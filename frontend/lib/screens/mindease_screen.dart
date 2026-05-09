@@ -2,13 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:lucide_icons/lucide_icons.dart';
-import 'package:intl/intl.dart';
 
 import '../utils/app_colors.dart';
 import '../utils/app_styles.dart';
 import '../widgets/custom_button.dart';
-import '../config/api_config.dart'; // Integrated for physical device connectivity
+import '../config/api_config.dart';
 
 class MindEaseScreen extends StatefulWidget {
   const MindEaseScreen({super.key});
@@ -19,13 +17,15 @@ class MindEaseScreen extends StatefulWidget {
 
 class _MindEaseScreenState extends State<MindEaseScreen> {
   final _journalController = TextEditingController();
-  bool _isLoading = false;
-  int _currentStep = 0; // 0: PHQ-9, 1: GAD-7, 2: Journaling
-  int _questionIndex = 0; // Tracks the specific question within a scale
 
-  // PHQ-9 & GAD-7 Scores
+  bool _isLoading = false;
+  int _currentStep = 0;
+  int _questionIndex = 0;
+
   final Map<int, int> _phqAnswers = {};
   final Map<int, int> _gadAnswers = {};
+
+  Map<String, dynamic>? _resultData;
 
   final List<String> _options = [
     "Not at all",
@@ -37,23 +37,23 @@ class _MindEaseScreenState extends State<MindEaseScreen> {
   final List<String> _phqQuestions = [
     "Little interest or pleasure in doing things?",
     "Feeling down, depressed, or hopeless?",
-    "Trouble falling or staying asleep, or sleeping too much?",
+    "Trouble falling or staying asleep?",
     "Feeling tired or having little energy?",
     "Poor appetite or overeating?",
-    "Feeling bad about yourself — or that you are a failure?",
+    "Feeling bad about yourself?",
     "Trouble concentrating on things?",
-    "Moving or speaking so slowly that others noticed?",
+    "Moving or speaking slowly?",
     "Thoughts that you would be better off dead?"
   ];
 
   final List<String> _gadQuestions = [
     "Feeling nervous, anxious or on edge?",
-    "Not being able to stop or control worrying?",
-    "Worrying too much about different things?",
+    "Not being able to stop worrying?",
+    "Worrying too much about things?",
     "Trouble relaxing?",
-    "Being so restless that it is hard to sit still?",
-    "Becoming easily annoyed or irritable?",
-    "Feeling afraid as if something awful might happen?"
+    "Being so restless it is hard to sit still?",
+    "Becoming easily annoyed?",
+    "Feeling afraid something awful might happen?"
   ];
 
   @override
@@ -62,26 +62,28 @@ class _MindEaseScreenState extends State<MindEaseScreen> {
     super.dispose();
   }
 
-  // --- Navigation Logic ---
+  int _calculateScore(Map<int, int> answers) {
+    return answers.values.fold(0, (sum, value) => sum + value);
+  }
 
-  void _nextQuestion(int totalQuestions) {
-    if (_questionIndex < totalQuestions - 1) {
-      setState(() {
-        _questionIndex++;
-      });
-    } else {
-      setState(() {
-        _currentStep++;
-        _questionIndex = 0; // Reset for next module
-      });
-    }
+  String _getPhqLevel(int score) {
+    if (score <= 4) return "Minimal depression";
+    if (score <= 9) return "Mild depression";
+    if (score <= 14) return "Moderate depression";
+    if (score <= 19) return "Moderately severe depression";
+    return "Severe depression";
+  }
+
+  String _getGadLevel(int score) {
+    if (score <= 4) return "Minimal anxiety";
+    if (score <= 9) return "Mild anxiety";
+    if (score <= 14) return "Moderate anxiety";
+    return "Severe anxiety";
   }
 
   void _previousQuestion() {
     if (_questionIndex > 0) {
-      setState(() {
-        _questionIndex--;
-      });
+      setState(() => _questionIndex--);
     } else if (_currentStep > 0) {
       setState(() {
         _currentStep--;
@@ -89,365 +91,235 @@ class _MindEaseScreenState extends State<MindEaseScreen> {
             ? _phqQuestions.length - 1
             : _gadQuestions.length - 1;
       });
-    } else {
-      // If at the very first question, exit the module
-      Navigator.pop(context);
     }
   }
 
-  // --- Backend Integration ---
-
-  Future<void> _submitAssessment() async {
-    if (_journalController.text.trim().isEmpty) {
-      _showError("Please write a few words in your journal first.");
-      return;
+  void _nextQuestion(int totalQuestions) {
+    if (_questionIndex < totalQuestions - 1) {
+      setState(() => _questionIndex++);
+    } else {
+      setState(() {
+        _currentStep++;
+        _questionIndex = 0;
+      });
     }
+  }
 
+  Future<void> _submitAssessment({bool skipJournal = false}) async {
     setState(() => _isLoading = true);
 
     try {
       final prefs = await SharedPreferences.getInstance();
-      final String? userId = prefs.getString('user_id');
+      final userId = prefs.getString('user_id');
 
-      if (userId == null) {
-        _showError("Session expired. Please login again.");
-        return;
+      final phqScore = _calculateScore(_phqAnswers);
+      final gadScore = _calculateScore(_gadAnswers);
+
+      final phqLevel = _getPhqLevel(phqScore);
+      final gadLevel = _getGadLevel(gadScore);
+
+      String journalSentiment = "Not Provided";
+      String journalTip = "Keep monitoring your mental health regularly.";
+
+      if (!skipJournal && _journalController.text.trim().isNotEmpty) {
+        final sentimentResponse = await http.post(
+          Uri.parse('${ApiConfig.mindEaseUrl}/analyze_sentiment'),
+          headers: {"Content-Type": "application/json"},
+          body: json.encode({
+            "text": _journalController.text.trim(),
+          }),
+        );
+
+        final sentimentData = json.decode(sentimentResponse.body);
+
+        journalSentiment = sentimentData["mood"];
+        journalTip = sentimentData["suggestion"];
       }
 
-      // Calculate clinical scores based on response indexes (0-3)
-      int phqTotal = _phqAnswers.values.fold(0, (sum, val) => sum + val);
-      int gadTotal = _gadAnswers.values.fold(0, (sum, val) => sum + val);
+      setState(() {
+        _resultData = {
+          "phq_score": phqScore,
+          "phq_level": phqLevel,
+          "gad_score": gadScore,
+          "gad_level": gadLevel,
+          "journal_sentiment": journalSentiment,
+          "overall_suggestion": journalTip
+        };
+      });
 
-      String phqLevel = _getPHQLevel(phqTotal);
-      String gadLevel = _getGADLevel(gadTotal);
-
-      // 1. Analyze Sentiment via FastAPI (Gemini/VADER)
-      // Uses ApiConfig.mindEaseUrl for dynamic IP handling
-      final sentimentResponse = await http.post(
-        Uri.parse('${ApiConfig.mindEaseUrl}/analyze_sentiment'),
+      await http.post(
+        Uri.parse('${ApiConfig.mindEaseUrl}/save_assessment'),
         headers: {"Content-Type": "application/json"},
-        body: json.encode({"text": _journalController.text.trim()}),
+        body: json.encode({
+          "user_id": userId ?? "",
+          "phq_score": phqScore,
+          "phq_level": phqLevel,
+          "gad_score": gadScore,
+          "gad_level": gadLevel,
+          "journal_entry": skipJournal ? "" : _journalController.text.trim(),
+          "journal_sentiment": journalSentiment,
+          "overall_suggestion": journalTip,
+          "journal_tip": journalTip // ✅ FIXED 422 ERROR
+        }),
       );
-
-      String sentimentResult = "Neutral";
-      String tip = "Take a deep breath and stay mindful.";
-      if (sentimentResponse.statusCode == 200) {
-        final sData = json.decode(sentimentResponse.body);
-        sentimentResult = sData['mood'];
-        tip = sData['suggestion'];
-      }
-
-      // 2. Save Integrated Assessment to MongoDB via LifeLog Hub
-      final saveResponse = await http
-          .post(
-            Uri.parse('${ApiConfig.mindEaseUrl}/save_assessment'),
-            headers: {"Content-Type": "application/json"},
-            body: json.encode({
-              "user_id": userId,
-              "phq_score": phqTotal,
-              "phq_level": phqLevel,
-              "gad_score": gadTotal,
-              "gad_level": gadLevel,
-              "journal_entry": _journalController.text.trim(),
-              "journal_sentiment": sentimentResult,
-              "overall_suggestion":
-                  "You are currently experiencing $phqLevel and $gadLevel.",
-              "journal_tip": tip
-            }),
-          )
-          .timeout(const Duration(seconds: 15));
-
-      if (saveResponse.statusCode == 201 || saveResponse.statusCode == 200) {
-        if (mounted) {
-          _showSummaryDialog(phqLevel, gadLevel, sentimentResult, tip);
-        }
-      } else {
-        _showError(
-            "Sync Error: ${saveResponse.statusCode}. Check backend logs.");
-      }
     } catch (e) {
-      _showError(
-          "Connection Failed. Ensure FastAPI is running on --host 0.0.0.0");
+      print("Error: $e");
     } finally {
       if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  String _getPHQLevel(int score) {
-    if (score <= 4) return "Minimal depression";
-    if (score <= 9) return "Mild depression";
-    if (score <= 14) return "Moderate depression";
-    return "Severe depression";
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text("MindEase Daily Assessment"),
+        centerTitle: true,
+      ),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _resultData != null
+              ? _buildResult()
+              : _buildStep(),
+    );
   }
 
-  String _getGADLevel(int score) {
-    if (score <= 4) return "Minimal anxiety";
-    if (score <= 9) return "Mild anxiety";
-    if (score <= 14) return "Moderate anxiety";
-    return "Severe anxiety";
-  }
-
-  void _showError(String msg) =>
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text(msg),
-          backgroundColor: AppColors.errorRed,
-          behavior: SnackBarBehavior.floating));
-
-  void _showSummaryDialog(String phq, String gad, String mood, String tip) {
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-        title: Row(
-          children: [
-            const Icon(LucideIcons.checkCircle, color: Colors.green),
-            const SizedBox(width: 10),
-            Text("AI Sync Complete",
-                style: AppStyles.subHeadingStyle.copyWith(fontSize: 18)),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text("Clinical Analysis:",
-                style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.blueGrey.shade700,
-                    fontSize: 12)),
-            const SizedBox(height: 8),
-            _buildResultRow(LucideIcons.cloudRain, "PHQ-9", phq),
-            _buildResultRow(LucideIcons.wind, "GAD-7", gad),
-            const Divider(height: 30),
-            Text("AI Journal Insights:",
-                style: TextStyle(
-                    fontWeight: FontWeight.bold,
-                    color: Colors.blueGrey.shade700,
-                    fontSize: 12)),
-            const SizedBox(height: 8),
-            Text("Mood: $mood",
-                style:
-                    const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(12),
-              width: double.infinity,
-              decoration: BoxDecoration(
-                  color: AppColors.primaryTeal.withOpacity(0.05),
-                  borderRadius: BorderRadius.circular(12)),
-              child: Text("Pro-Tip: $tip",
-                  style: const TextStyle(
-                      fontStyle: FontStyle.italic,
-                      color: AppColors.primaryTeal,
-                      fontSize: 13)),
-            ),
-          ],
-        ),
-        actions: [
-          ElevatedButton(
-            onPressed: () {
-              Navigator.pop(context);
-              Navigator.pushReplacementNamed(context, '/main_wrapper');
-            },
-            child: const Text("Return to Dashboard"),
+  Widget _buildResult() {
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text("Assessment Result", style: AppStyles.headingStyle),
+          const SizedBox(height: 20),
+          _resultCard("PHQ-9 Score",
+              "${_resultData!['phq_score']} (${_resultData!['phq_level']})"),
+          _resultCard("GAD-7 Score",
+              "${_resultData!['gad_score']} (${_resultData!['gad_level']})"),
+          _resultCard("Journal Mood", _resultData!['journal_sentiment']),
+          _resultCard("Suggestion", _resultData!['overall_suggestion']),
+          const Spacer(),
+          CustomButton(
+            text: "Go to Home",
+            onPressed: () =>
+                Navigator.pushReplacementNamed(context, '/main_wrapper'),
           )
         ],
       ),
     );
   }
 
-  Widget _buildResultRow(IconData icon, String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 4.0),
-      child: Row(
-        children: [
-          Icon(icon, size: 14, color: Colors.grey),
-          const SizedBox(width: 8),
-          Text("$label: ", style: const TextStyle(fontSize: 14)),
-          Text(value,
-              style:
-                  const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-        ],
+  Widget _resultCard(String title, String value) {
+    return Card(
+      elevation: 3,
+      margin: const EdgeInsets.only(bottom: 14),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
+          const SizedBox(height: 6),
+          Text(value)
+        ]),
       ),
     );
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.backgroundLight,
-      appBar: AppBar(
-        title: Text("MindEase AI Check-in",
-            style: AppStyles.headingStyle.copyWith(fontSize: 18)),
-        centerTitle: true,
-        leading: IconButton(
-          icon: const Icon(LucideIcons.chevronLeft),
-          onPressed: _previousQuestion,
-        ),
-      ),
-      body: Column(
-        children: [
-          LinearProgressIndicator(
-            value: _calculateTotalProgress(),
-            backgroundColor: Colors.grey.shade200,
-            color: AppColors.primaryTeal,
-            minHeight: 6,
-          ),
-          Expanded(
-            child: _isLoading
-                ? const Center(
-                    child:
-                        CircularProgressIndicator(color: AppColors.primaryTeal))
-                : _buildStepContent(),
-          ),
-        ],
-      ),
-    );
-  }
-
-  double _calculateTotalProgress() {
-    int totalQuestions = _phqQuestions.length + _gadQuestions.length + 1;
-    int completedQuestions = 0;
-    if (_currentStep == 0) completedQuestions = _questionIndex;
-    if (_currentStep == 1)
-      completedQuestions = _phqQuestions.length + _questionIndex;
-    if (_currentStep == 2)
-      completedQuestions = _phqQuestions.length + _gadQuestions.length;
-    return (completedQuestions + 1) / totalQuestions;
-  }
-
-  Widget _buildStepContent() {
-    if (_currentStep == 0)
-      return _buildQuestionStep(
-          "Step 1: PHQ-9 (Mood)", _phqQuestions, _phqAnswers);
-    if (_currentStep == 1)
-      return _buildQuestionStep(
-          "Step 2: GAD-7 (Anxiety)", _gadQuestions, _gadAnswers);
-    return _buildJournaling();
+  Widget _buildStep() {
+    if (_currentStep == 0) {
+      return _buildQuestionStep("PHQ-9 (Mood)", _phqQuestions, _phqAnswers);
+    }
+    if (_currentStep == 1) {
+      return _buildQuestionStep("GAD-7 (Anxiety)", _gadQuestions, _gadAnswers);
+    }
+    return _buildJournal();
   }
 
   Widget _buildQuestionStep(
       String title, List<String> questions, Map<int, int> answerMap) {
-    String currentQuestion = questions[_questionIndex];
-
     return Padding(
-      padding: const EdgeInsets.all(24.0),
+      padding: const EdgeInsets.all(20),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(title,
-                  style: AppStyles.subHeadingStyle.copyWith(
-                      color: AppColors.primaryTeal,
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold)),
-              Text("${_questionIndex + 1}/${questions.length}",
-                  style: const TextStyle(fontSize: 12, color: Colors.grey)),
-            ],
+          Text(title, style: AppStyles.subHeadingStyle),
+          const SizedBox(height: 20),
+          Text(
+            questions[_questionIndex],
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
-          const SizedBox(height: 32),
-          Text(currentQuestion,
-              style: const TextStyle(
-                  fontWeight: FontWeight.bold, fontSize: 20, height: 1.3)),
-          const SizedBox(height: 40),
+          const SizedBox(height: 20),
           Expanded(
-            child: ListView.separated(
+            child: ListView.builder(
               itemCount: _options.length,
-              separatorBuilder: (context, index) => const SizedBox(height: 12),
               itemBuilder: (context, index) {
                 bool isSelected = answerMap[_questionIndex] == index;
+
                 return GestureDetector(
-                  onTap: () {
-                    setState(() => answerMap[_questionIndex] = index);
-                    Future.delayed(const Duration(milliseconds: 350),
-                        () => _nextQuestion(questions.length));
-                  },
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    padding: const EdgeInsets.symmetric(
-                        vertical: 18, horizontal: 20),
+                  onTap: () =>
+                      setState(() => answerMap[_questionIndex] = index),
+                  child: Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.all(14),
                     decoration: BoxDecoration(
                       color: isSelected ? AppColors.primaryTeal : Colors.white,
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(
-                          color: isSelected
-                              ? AppColors.primaryTeal
-                              : Colors.grey.shade300,
-                          width: 1.5),
-                      boxShadow: isSelected
-                          ? [
-                              BoxShadow(
-                                  color: AppColors.primaryTeal.withOpacity(0.3),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 4))
-                            ]
-                          : [],
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.grey.shade300),
                     ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(_options[index],
-                            style: TextStyle(
-                                color:
-                                    isSelected ? Colors.white : Colors.black87,
-                                fontWeight: isSelected
-                                    ? FontWeight.bold
-                                    : FontWeight.normal,
-                                fontSize: 15)),
-                        if (isSelected)
-                          const Icon(LucideIcons.checkCircle2,
-                              color: Colors.white, size: 20),
-                      ],
+                    child: Text(
+                      _options[index],
+                      style: TextStyle(
+                          color: isSelected ? Colors.white : Colors.black87),
                     ),
                   ),
                 );
               },
             ),
           ),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: _previousQuestion,
+                  child: const Text("Previous"),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: answerMap[_questionIndex] == null
+                      ? null
+                      : () => _nextQuestion(questions.length),
+                  child: const Text("Next"),
+                ),
+              ),
+            ],
+          )
         ],
       ),
     );
   }
 
-  Widget _buildJournaling() {
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(24),
+  Widget _buildJournal() {
+    return Padding(
+      padding: const EdgeInsets.all(20),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const Center(
-              child: Icon(LucideIcons.penTool,
-                  size: 48, color: AppColors.primaryTeal)),
-          const SizedBox(height: 16),
-          const Center(
-              child: Text("Step 3: Reflective Journaling",
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold))),
-          const SizedBox(height: 8),
-          const Center(
-              child: Text(
-                  "Your words help our AI understand your mental landscape.",
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.grey, fontSize: 13))),
-          const SizedBox(height: 32),
+          Text("Daily Reflection (Optional)", style: AppStyles.subHeadingStyle),
+          const SizedBox(height: 12),
           TextField(
             controller: _journalController,
-            maxLines: 8,
-            decoration: AppStyles.inputDecoration.copyWith(
-              hintText: "How are you feeling right now? What's on your mind?",
-              fillColor: Colors.white,
-              alignLabelWithHint: true,
-            ),
+            maxLines: 5,
+            decoration: AppStyles.inputDecoration
+                .copyWith(hintText: "Write your thoughts (optional)..."),
           ),
-          const SizedBox(height: 32),
-          SizedBox(
-            width: double.infinity,
-            child: CustomButton(
-                text: "Sync Assessment to Hub", onPressed: _submitAssessment),
-          ),
-          const SizedBox(height: 40),
+          const SizedBox(height: 20),
+          CustomButton(
+              text: "Submit Assessment", onPressed: () => _submitAssessment()),
+          const SizedBox(height: 10),
+          TextButton(
+              onPressed: () => _submitAssessment(skipJournal: true),
+              child: const Text("Skip Journal"))
         ],
       ),
     );

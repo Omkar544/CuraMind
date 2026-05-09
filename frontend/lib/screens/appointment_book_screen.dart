@@ -8,13 +8,12 @@ import 'package:intl/intl.dart';
 import '../utils/app_colors.dart';
 import '../utils/app_styles.dart';
 import '../widgets/custom_button.dart';
-import '../services/notification_service.dart';
-import '../config/api_config.dart'; // Integrated for physical device connectivity
+//import '../services/notification_service.dart';
+import '../config/api_config.dart';
 
 class AppointmentBookScreen extends StatefulWidget {
-  final Map<String, dynamic>?
-      existingData; // Passed when editing an existing record
-  final String initialMode; // 'appointment' or 'medicine'
+  final Map<String, dynamic>? existingData;
+  final String initialMode;
 
   const AppointmentBookScreen({
     super.key,
@@ -32,19 +31,16 @@ class _AppointmentBookScreenState extends State<AppointmentBookScreen> {
   bool _isSaving = false;
   bool _isAlertEnabled = true;
 
-  // Controllers for dynamic input handling
-  final _nameController =
-      TextEditingController(); // Doctor Name OR Medicine Name
-  final _detailController = TextEditingController(); // Specialty OR Dosage
-  final _dateController = TextEditingController(); // Only for Appointments
-  final _timeController = TextEditingController(); // Alarm/Visit Time
+  final _nameController = TextEditingController();
+  final _detailController = TextEditingController();
+  final _dateController = TextEditingController();
+  final _timeController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     _activeTab = widget.initialMode;
 
-    // Check if we are in "Update Mode" and pre-fill controllers
     if (widget.existingData != null) {
       final data = widget.existingData!;
       _activeTab = data['type'] ?? widget.initialMode;
@@ -59,6 +55,7 @@ class _AppointmentBookScreenState extends State<AppointmentBookScreen> {
         _detailController.text = data['dosage'] ?? "";
         _timeController.text = data['time'] ?? data['medicine_time'] ?? "";
       }
+
       _isAlertEnabled = data['alert_enabled'] ?? true;
     }
   }
@@ -72,8 +69,6 @@ class _AppointmentBookScreenState extends State<AppointmentBookScreen> {
     super.dispose();
   }
 
-  // --- 📅 Date & Time Selectors ---
-
   Future<void> _selectDate() async {
     DateTime? picked = await showDatePicker(
       context: context,
@@ -81,9 +76,11 @@ class _AppointmentBookScreenState extends State<AppointmentBookScreen> {
       firstDate: DateTime.now(),
       lastDate: DateTime.now().add(const Duration(days: 365)),
     );
+
     if (picked != null) {
-      setState(
-          () => _dateController.text = DateFormat('yyyy-MM-dd').format(picked));
+      setState(() {
+        _dateController.text = DateFormat('yyyy-MM-dd').format(picked);
+      });
     }
   }
 
@@ -92,15 +89,17 @@ class _AppointmentBookScreenState extends State<AppointmentBookScreen> {
       context: context,
       initialTime: TimeOfDay.now(),
     );
+
     if (picked != null) {
-      setState(() => _timeController.text = picked.format(context));
+      setState(() {
+        _timeController.text = picked.format(context);
+      });
     }
   }
 
-  // --- 📡 Backend Submission Logic ---
-
   Future<void> _handleSave() async {
     if (!_formKey.currentState!.validate()) return;
+
     setState(() => _isSaving = true);
 
     try {
@@ -112,8 +111,6 @@ class _AppointmentBookScreenState extends State<AppointmentBookScreen> {
         return;
       }
 
-      // 1. Construct Payload for MongoDB
-      // Uses a manual IST offset (UTC+5:30) for reliable sorting in LifeLog Hub
       final Map<String, dynamic> payload = {
         "user_id": userId,
         "type": _activeTab,
@@ -139,9 +136,9 @@ class _AppointmentBookScreenState extends State<AppointmentBookScreen> {
         });
       }
 
-      // 2. Resolve URL via ApiConfig
       final bool isUpdate = widget.existingData != null;
       final String docId = isUpdate ? widget.existingData!['_id'] : "";
+
       final String url = isUpdate
           ? '${ApiConfig.careClockUrl}/update/$docId'
           : '${ApiConfig.careClockUrl}/save';
@@ -155,32 +152,19 @@ class _AppointmentBookScreenState extends State<AppointmentBookScreen> {
           .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200 || response.statusCode == 201) {
-        // 3. Schedule the "Ringing" Local Notification if enabled
-        if (_isAlertEnabled) {
-          await NotificationService().scheduleNotification(
-            id: DateTime.now().millisecondsSinceEpoch % 100000,
-            title: _activeTab == 'appointment'
-                ? "Doctor Appointment"
-                : "Time for Medicine",
-            body: _activeTab == 'appointment'
-                ? "Visit Dr. ${_nameController.text} (${_detailController.text})"
-                : "Take your ${_nameController.text} dose: ${_detailController.text}",
-            timeStr: _timeController.text, // e.g., "10:30 PM"
-            dateStr: _activeTab == 'appointment' ? _dateController.text : null,
-          );
-        }
+        
+        
 
         if (mounted) {
           _showSnackBar(
               isUpdate ? "Schedule Updated!" : "Syncing to LifeLog Hub... ✅");
-          // Return 'true' to trigger an auto-refresh on the previous screen
           Navigator.pop(context, true);
         }
       } else {
         _showSnackBar("Hub Error: ${response.statusCode}", isError: true);
       }
     } catch (e) {
-      _showSnackBar("Connectivity Error: Ensure backend is on --host 0.0.0.0",
+      _showSnackBar("Connectivity Error: Ensure backend is running",
           isError: true);
     } finally {
       if (mounted) setState(() => _isSaving = false);
@@ -236,6 +220,145 @@ class _AppointmentBookScreenState extends State<AppointmentBookScreen> {
     );
   }
 
+  Widget _buildFormFields() {
+    bool isAppt = _activeTab == "appointment";
+
+    return Column(
+      children: [
+        _buildNameField(isAppt),
+        isAppt ? _buildSpecialtyDropdown() : _buildDosageDropdown(),
+        if (isAppt)
+          _buildClickableField(_dateController, "Schedule Date",
+              LucideIcons.calendar, _selectDate),
+        _buildClickableField(
+            _timeController,
+            isAppt ? "Visit Time" : "Daily Alarm Time",
+            LucideIcons.alarmClock,
+            _selectTime),
+      ],
+    );
+  }
+
+  Widget _buildNameField(bool isAppt) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: TextFormField(
+        controller: _nameController,
+        decoration: AppStyles.inputDecoration.copyWith(
+          labelText: isAppt ? "Doctor's Full Name" : "Medicine Name",
+          prefixIcon: Icon(isAppt ? LucideIcons.user : LucideIcons.pill,
+              size: 20, color: AppColors.iconColor),
+        ),
+        validator: (v) {
+          if (v == null || v.isEmpty) return "Required";
+
+          if (isAppt && !RegExp(r'^[a-zA-Z\s]+$').hasMatch(v)) {
+            return "Only alphabets allowed";
+          }
+
+          return null;
+        },
+      ),
+    );
+  }
+
+  Widget _buildSpecialtyDropdown() {
+    final specialties = [
+      "Cardiologist",
+      "Dermatologist",
+      "Neurologist",
+      "Orthopedic",
+      "Pediatrician",
+      "Gynecologist",
+      "Psychiatrist",
+      "Dentist",
+      "Ophthalmologist",
+      "ENT Specialist",
+      "Oncologist",
+      "Radiologist",
+      "General Physician",
+      "Urologist",
+      "Gastroenterologist",
+      "Pulmonologist",
+      "Endocrinologist",
+      "Nephrologist",
+      "Surgeon"
+    ];
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: DropdownButtonFormField<String>(
+        value: specialties.contains(_detailController.text)
+            ? _detailController.text
+            : null,
+        decoration: AppStyles.inputDecoration.copyWith(
+          labelText: "Doctor Specialty",
+          prefixIcon: Icon(LucideIcons.stethoscope),
+        ),
+        items: specialties
+            .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+            .toList(),
+        onChanged: (v) => _detailController.text = v!,
+        validator: (v) => v == null ? "Required" : null,
+      ),
+    );
+  }
+
+  Widget _buildDosageDropdown() {
+    final dosages = [
+      "1 mg",
+      "2 mg",
+      "5 mg",
+      "10 mg",
+      "25 mg",
+      "50 mg",
+      "100 mg",
+      "250 mg",
+      "500 mg",
+      "1 Tablet",
+      "2 Tablets",
+      "1 Capsule",
+      "2 Capsules",
+      "5 ml",
+      "10 ml"
+    ];
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: DropdownButtonFormField<String>(
+        value: dosages.contains(_detailController.text)
+            ? _detailController.text
+            : null,
+        decoration: AppStyles.inputDecoration.copyWith(
+          labelText: "Dosage",
+          prefixIcon: Icon(LucideIcons.layers),
+        ),
+        items: dosages
+            .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+            .toList(),
+        onChanged: (v) => _detailController.text = v!,
+        validator: (v) => v == null ? "Required" : null,
+      ),
+    );
+  }
+
+  Widget _buildClickableField(TextEditingController ctrl, String label,
+      IconData icon, VoidCallback onTap) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: TextFormField(
+        controller: ctrl,
+        readOnly: true,
+        onTap: onTap,
+        decoration: AppStyles.inputDecoration.copyWith(
+          labelText: label,
+          prefixIcon: Icon(icon, size: 20, color: AppColors.iconColor),
+        ),
+        validator: (v) => v == null || v.isEmpty ? "Required" : null,
+      ),
+    );
+  }
+
   Widget _buildTypeToggle() {
     return Container(
       decoration: BoxDecoration(
@@ -253,6 +376,7 @@ class _AppointmentBookScreenState extends State<AppointmentBookScreen> {
 
   Widget _toggleItem(String type, String label, IconData icon) {
     bool active = _activeTab == type;
+
     return Expanded(
       child: GestureDetector(
         onTap: () => setState(() {
@@ -279,69 +403,6 @@ class _AppointmentBookScreenState extends State<AppointmentBookScreen> {
             ],
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _buildFormFields() {
-    bool isAppt = _activeTab == "appointment";
-    return Column(
-      children: [
-        _buildTextField(
-          _nameController,
-          isAppt ? "Doctor's Full Name" : "Medicine Name",
-          isAppt ? LucideIcons.user : LucideIcons.pill,
-        ),
-        _buildTextField(
-          _detailController,
-          isAppt
-              ? "Specialty (e.g. Neurologist)"
-              : "Dosage (e.g. 500mg or 1 Tab)",
-          isAppt ? LucideIcons.stethoscope : LucideIcons.layers,
-        ),
-        if (isAppt)
-          _buildClickableField(_dateController, "Schedule Date",
-              LucideIcons.calendar, _selectDate),
-        _buildClickableField(
-          _timeController,
-          isAppt ? "Visit Time" : "Daily Alarm Time",
-          LucideIcons.alarmClock,
-          _selectTime,
-        ),
-      ],
-    );
-  }
-
-  Widget _buildTextField(
-      TextEditingController ctrl, String label, IconData icon) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: TextFormField(
-        controller: ctrl,
-        style: const TextStyle(fontSize: 14),
-        decoration: AppStyles.inputDecoration.copyWith(
-          labelText: label,
-          prefixIcon: Icon(icon, size: 20, color: AppColors.iconColor),
-        ),
-        validator: (v) => v == null || v.isEmpty ? "Required" : null,
-      ),
-    );
-  }
-
-  Widget _buildClickableField(TextEditingController ctrl, String label,
-      IconData icon, VoidCallback onTap) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: TextFormField(
-        controller: ctrl,
-        readOnly: true,
-        onTap: onTap,
-        style: const TextStyle(fontSize: 14),
-        decoration: AppStyles.inputDecoration.copyWith(
-          labelText: label,
-          prefixIcon: Icon(icon, size: 20, color: AppColors.iconColor),
-        ),
-        validator: (v) => v == null || v.isEmpty ? "Required" : null,
       ),
     );
   }

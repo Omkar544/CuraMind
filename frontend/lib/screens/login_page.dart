@@ -3,7 +3,7 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:lucide_icons/lucide_icons.dart';
-
+import '../config/api_config.dart';
 import '../utils/app_colors.dart';
 import '../utils/app_styles.dart';
 
@@ -26,7 +26,7 @@ class _LoginPageState extends State<LoginPage> {
   String? _errorMessage;
 
   // Use 10.0.2.2 for Android Emulator. Update to your laptop's IPv4 for physical mobile testing.
-  final String _apiBaseUrl = 'http://10.0.2.2:8000';
+  final String _apiBaseUrl = ApiConfig.rootUrl;
 
   @override
   void dispose() {

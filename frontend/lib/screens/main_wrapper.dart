@@ -189,7 +189,7 @@ class _MainWrapperState extends State<MainWrapper> {
                 LucideIcons.sparkles, 'Motivation', const AboutScreen()),
             const Divider(indent: 20, endIndent: 20),
             _buildDrawerItem(LucideIcons.settings, 'Profile & Settings',
-                const SettingsPage()),
+                const SettingsScreen()),
             ListTile(
               leading:
                   const Icon(LucideIcons.logOut, color: AppColors.errorRed),
